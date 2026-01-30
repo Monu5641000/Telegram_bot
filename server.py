@@ -124,7 +124,7 @@ def expire(user_id):
     return jsonify({"status": "error", "message": "User not found"}), 404
 
 def run_server():
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=5050)
 
 if __name__ == '__main__':
     run_server()
