@@ -34,5 +34,6 @@ PLANS = {
     "1-Day": {"price": 49, "days": 1, "minutes": 0, "description": "Access for 1 Day"},
     "1-Month": {"price": 100, "days": 30, "minutes": 0, "description": "Access for 30 Days"},
     "3-Months": {"price": 150, "days": 90, "minutes": 0, "description": "Access for 90 Days"},
-    "Demo": {"price": 0, "days": 0, "minutes": 1, "description": "Free Testing Access (1 Minute)"}
+    "6-Months": {"price": 199, "days": 180, "minutes": 0, "description": "Access for 180 Days"},
+    "Demo": {"price": "FREE", "url": "https://t.me/+r5WU9e69M8xjY2Zl", "description": "Join Free Channel"}
 }

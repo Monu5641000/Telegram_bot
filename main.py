@@ -50,7 +50,12 @@ async def show_subscription_plans(update: Update, context: ContextTypes.DEFAULT_
     
     keyboard = []
     for plan_name, details in config.PLANS.items():
-        # Hide Demo if already used
+        # Check if it's a URL-based plan (Demo)
+        if details.get('url'):
+            keyboard.append([InlineKeyboardButton(plan_name, url=details['url'])])
+            continue
+
+        # Hide old Demo (price 0) if already used (checking validity of legacy logic)
         if details['price'] == 0 and user.get("demo_used"):
             continue
             

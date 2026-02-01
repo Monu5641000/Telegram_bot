@@ -6,13 +6,17 @@ DB_FILE = "db.json"
 
 def _load_db():
     if not os.path.exists(DB_FILE):
-        return {"users": {}, "videos": [], "orders": {}}
+        return {"users": {}, "videos": [], "orders": {}, "payouts": []}
     try:
         with open(DB_FILE, "r") as f:
-            return json.load(f)
+            data = json.load(f)
+            # Ensure keys exist if loading old db
+            if "payouts" not in data:
+                data["payouts"] = []
+            return data
     except Exception as e:
         print(f"❌ Error loading db.json: {e}")
-        return {"users": {}, "videos": [], "orders": {}}
+        return {"users": {}, "videos": [], "orders": {}, "payouts": []}
 
 def _save_db(data):
     with open(DB_FILE, "w") as f:
@@ -216,3 +220,33 @@ def get_earnings_stats():
         "total": total_earnings,
         "daily": daily_earnings
     }
+
+# --- Payout Operations ---
+def add_payout(amount, note=""):
+    db = _load_db()
+    if "payouts" not in db:
+        db["payouts"] = []
+    
+    payout = {
+        "id": str(len(db["payouts"]) + 1),
+        "amount": float(amount),
+        "date": datetime.now().isoformat(),
+        "note": note
+    }
+    db["payouts"].append(payout)
+    _save_db(db)
+    return payout
+
+def get_payouts():
+    db = _load_db()
+    return db.get("payouts", [])
+
+def get_total_paid():
+    db = _load_db()
+    total = 0
+    for p in db.get("payouts", []):
+        try:
+            total += float(p["amount"])
+        except:
+            pass
+    return total
