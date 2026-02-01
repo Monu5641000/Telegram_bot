@@ -7,6 +7,7 @@ from flask_cors import CORS
 import requests
 import json
 import config
+import time
 
 # Configure logging to be less verbose for Flask
 log = logging.getLogger('werkzeug')
@@ -28,6 +29,9 @@ def safe_send_telegram(endpoint, json_data=None, data=None, files=None):
             if files:
                 # requests/session with files usually requires data, not json
                 response = session.post(url, data=data, files=files, timeout=10)
+            elif data:
+                 # Standard form-data/x-www-form-urlencoded
+                 response = session.post(url, data=data, timeout=10)
             else:
                 response = session.post(url, json=json_data, timeout=10)
             return response
@@ -164,78 +168,125 @@ def upload_image():
         return jsonify({"status": "error", "message": "No selected file"}), 400
     
     if file:
-        # Clear existing photos
         photos_dir = "photos"
         try:
             if not os.path.exists(photos_dir):
                 os.makedirs(photos_dir)
-            
-            # Remove all files in photos dir
             for filename in os.listdir(photos_dir):
                 file_path = os.path.join(photos_dir, filename)
                 try:
-                    if os.path.isfile(file_path) or os.path.islink(file_path):
-                        os.unlink(file_path)
-                except Exception as e:
-                    print(f"Failed to delete {file_path}. Reason: {e}")
+                    if os.path.isfile(file_path): os.unlink(file_path)
+                except: pass
             
-            # Save new file
-            filename = file.filename
-            file.save(os.path.join(photos_dir, filename))
+            file.save(os.path.join(photos_dir, file.filename))
+            return jsonify({"status": "success"})
+        except Exception as e:
+            return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/upload_qr', methods=['POST'])
+def upload_qr():
+    if 'file' not in request.files:
+        return jsonify({"status": "error", "message": "No file part"}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"status": "error", "message": "No selected file"}), 400
+    
+    if file:
+        try:
+            file.save(config.QR_CODE_PATH)
             return jsonify({"status": "success"})
         except Exception as e:
             return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/broadcast', methods=['POST'])
 def broadcast():
-    data = request.json
-    message = data.get("message")
-    target = data.get("target", "all") # all, active, expired
-    btn_text = data.get("btn_text")
-    btn_url = data.get("btn_url")
+    # Handle Multipart Form Data
+    message = request.form.get("message")
+    target = request.form.get("target", "all")
+    btn_text = request.form.get("btn_text")
+    btn_url = request.form.get("btn_url")
     
-    if not message:
-        return jsonify({"status": "error", "message": "Message is required"}), 400
+    file = request.files.get("file")
+    
+    if not message and not file:
+        return jsonify({"status": "error", "message": "Message or File is required"}), 400
         
     users = db.get_all_users()
-    count = 0
     
     reply_markup = None
     if btn_text and btn_url:
-        reply_markup = {
-            "inline_keyboard": [[
-                {"text": btn_text, "url": btn_url}
-            ]]
-        }
+        reply_markup = {"inline_keyboard": [[{"text": btn_text, "url": btn_url}]]}
     
-    def send_broadcast_thread():
+    # Save file temporarily if exists
+    temp_file_path = None
+    media_type = None
+    if file:
+        filename = file.filename.lower()
+        if filename.endswith(('.jpg', '.jpeg', '.png', '.webp')):
+            media_type = "photo"
+        elif filename.endswith(('.mp4', '.mov', '.avi')):
+            media_type = "video"
+        
+        if not os.path.exists("static/temp"):
+            os.makedirs("static/temp")
+        temp_file_path = os.path.join("static/temp", file.filename)
+        file.save(temp_file_path)
+
+    def send_broadcast_thread(temp_path, m_type):
         sent_count = 0
+        file_id = None # Store file_id after first upload to reuse
+        
         for user in users:
             try:
                 # Filter Logic
-                if target == "active" and not user.get("is_subscribed"):
-                    continue
-                if target == "expired" and user.get("is_subscribed"):
-                    continue
+                if target == "active" and not user.get("is_subscribed"): continue
+                if target == "expired" and user.get("is_subscribed"): continue
                 
-                # Send
-                safe_send_telegram(
-                    "sendMessage",
-                    json_data={
-                        "chat_id": user['user_id'],
-                        "text": message,
-                        "reply_markup": reply_markup,
-                        "parse_mode": "Markdown" # Assumes markdown
-                    }
-                )
-                sent_count += 1
-                time.sleep(0.05) # Rate limit safety (20 msg/sec is max globally, keep it safe)
-            except Exception as e:
-                print(f"Broadcast failed for {user.get('user_id')}: {e}")
-        print(f"Broadcast completed. Sent to {sent_count} users.")
+                chat_id = user['user_id']
+                payload = {
+                    "chat_id": chat_id,
+                    "parse_mode": "Markdown",
+                    "reply_markup": json.dumps(reply_markup) if reply_markup else None
+                }
+                if message: payload["caption" if m_type else "text"] = message
 
-    # Run in background to not block response
-    threading.Thread(target=send_broadcast_thread).start()
+                # CASE 1: Text Only
+                if not m_type:
+                    safe_send_telegram("sendMessage", data=payload)
+                
+                # CASE 2: Media (First Time Upload)
+                elif file_id is None:
+                    with open(temp_path, 'rb') as f:
+                        method = "sendPhoto" if m_type == "photo" else "sendVideo"
+                        files = {m_type: f}
+                        resp = safe_send_telegram(method, data=payload, files=files)
+                        
+                        # Try to extract file_id for optimization
+                        if resp and resp.status_code == 200:
+                            res_json = resp.json()
+                            if m_type == "photo":
+                                file_id = res_json['result']['photo'][-1]['file_id']
+                            elif m_type == "video":
+                                file_id = res_json['result']['video']['file_id']
+                                
+                # CASE 3: Media (Reuse File ID)
+                else:
+                    method = "sendPhoto" if m_type == "photo" else "sendVideo"
+                    payload[m_type] = file_id
+                    safe_send_telegram(method, data=payload)
+
+                sent_count += 1
+                time.sleep(0.05)
+            except Exception as e:
+                print(f"Broadcast error for {user.get('user_id')}: {e}")
+        
+        print(f"Broadcast completed. Sent to {sent_count} users.")
+        
+        # Cleanup
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
+
+    threading.Thread(target=send_broadcast_thread, args=(temp_file_path, media_type)).start()
     
     return jsonify({"status": "success", "message": "Broadcast started"})
 
