@@ -1,112 +1,140 @@
 import json
 import os
 from datetime import datetime, timedelta
+import pymongo
+import config
 
-DB_FILE = "db.json"
+client = pymongo.MongoClient(config.MONGO_URI)
+db = client[config.DB_NAME]
 
-def _load_db():
-    if not os.path.exists(DB_FILE):
-        return {"users": {}, "videos": [], "orders": {}, "payouts": []}
+users_col = db["users"]
+videos_col = db["videos"]
+orders_col = db["orders"]
+payouts_col = db["payouts"]
+settings_col = db["settings"]
+
+def migrate_from_json():
+    db_file = "db.json"
+    if not os.path.exists(db_file): return
     try:
-        with open(DB_FILE, "r") as f:
+        with open(db_file, "r") as f:
             data = json.load(f)
-            # Ensure keys exist if loading old db
-            if "payouts" not in data:
-                data["payouts"] = []
-            return data
+            
+        if "users" in data and users_col.count_documents({}) == 0:
+            users_list = list(data["users"].values())
+            if users_list: users_col.insert_many(users_list)
+            
+        if "videos" in data and videos_col.count_documents({}) == 0:
+            if data["videos"]: videos_col.insert_many(data["videos"])
+            
+        if "orders" in data and orders_col.count_documents({}) == 0:
+            orders_list = list(data["orders"].values())
+            if orders_list: orders_col.insert_many(orders_list)
+            
+        if "payouts" in data and payouts_col.count_documents({}) == 0:
+            if data["payouts"]: payouts_col.insert_many(data["payouts"])
+            
+        os.rename(db_file, "db_migrated.json")
     except Exception as e:
-        print(f"❌ Error loading db.json: {e}")
-        return {"users": {}, "videos": [], "orders": {}, "payouts": []}
+        print(f"Migration error: {e}")
 
-def _save_db(data):
-    with open(DB_FILE, "w") as f:
-        json.dump(data, f, indent=4, default=str)
+migrate_from_json()
+
+# --- Settings Operations ---
+def get_main_menu_text():
+    setting = settings_col.find_one({"_id": "main_menu"})
+    if setting and "text" in setting:
+        return setting["text"]
+    return None
+
+def update_main_menu_text(text):
+    settings_col.update_one({"_id": "main_menu"}, {"$set": {"text": text}}, upsert=True)
+
+def get_pricing_plans():
+    setting = settings_col.find_one({"_id": "pricing_plans"})
+    if setting and "plans" in setting:
+        return setting["plans"]
+    
+    # Default config plans if not set in DB
+    default_plans = {
+        "1-Day": {"price": 49, "days": 1, "minutes": 0, "description": "Access for 1 Day"},
+        "1-Week": {"price": 99, "days": 7, "minutes": 0, "description": "Access for 7 Days"},
+        "1-Month": {"price": 199, "days": 30, "minutes": 0, "description": "Access for 30 Days"},
+        "3-Months": {"price": 299, "days": 90, "minutes": 0, "description": "Access for 90 Days"},
+        "6-Months": {"price": 399, "days": 180, "minutes": 0, "description": "Access for 180 Days"},
+        "Lifetime": {"price": 699, "days": 36500, "minutes": 0, "description": "Lifetime Access"},
+        "Demo": {"price": 0, "url": "https://t.me/+r5WU9e69M8xjY2Zl", "description": "Join Free Channel"}
+    }
+    update_pricing_plans(default_plans)
+    return default_plans
+
+def update_pricing_plans(plans_dict):
+    settings_col.update_one({"_id": "pricing_plans"}, {"$set": {"plans": plans_dict}}, upsert=True)
 
 # --- User Operations ---
 def get_user(user_id):
-    db = _load_db()
-    user_id = str(user_id)
-    user = db["users"].get(user_id)
+    user_id_str = str(user_id)
+    user = users_col.find_one({"user_id": int(user_id_str)}) or users_col.find_one({"user_id": user_id_str})
     
     if not user:
         user = {
-            "user_id": int(user_id),
+            "user_id": int(user_id_str),
             "is_subscribed": False,
             "subscription_expiry": None,
             "current_video_index": 0,
             "last_message_id": None,
-            "demo_used": False
+            "demo_used": False,
+            "joined_at": datetime.now().isoformat()
         }
-        db["users"][user_id] = user
-        _save_db(db)
+        users_col.insert_one(user)
     else:
         # Check expiry
         if user.get("is_subscribed") and user.get("subscription_expiry"):
             expiry = datetime.fromisoformat(user["subscription_expiry"]) if isinstance(user["subscription_expiry"], str) else user["subscription_expiry"]
             if expiry < datetime.now():
+                users_col.update_one({"_id": user["_id"]}, {"$set": {"is_subscribed": False}})
                 user["is_subscribed"] = False
-                db["users"][user_id] = user
-                _save_db(db)
     return user
 
 def mark_demo_used(user_id):
-    db = _load_db()
-    user_id = str(user_id)
-    if user_id in db["users"]:
-        db["users"][user_id]["demo_used"] = True
-        _save_db(db)
+    users_col.update_one({"user_id": int(user_id)}, {"$set": {"demo_used": True}})
 
 def update_last_message_id(user_id, message_id):
-    db = _load_db()
-    user_id = str(user_id)
-    if user_id in db["users"]:
-        db["users"][user_id]["last_message_id"] = message_id
-        _save_db(db)
+    users_col.update_one({"user_id": int(user_id)}, {"$set": {"last_message_id": message_id}})
 
 def update_user_subscription(user_id, days=0, minutes=0):
-    db = _load_db()
-    user_id = str(user_id)
-    if user_id in db["users"]:
-        expiry = datetime.now() + timedelta(days=days, minutes=minutes)
-        db["users"][user_id]["is_subscribed"] = True
-        db["users"][user_id]["subscription_expiry"] = expiry.isoformat()
-        _save_db(db)
+    expiry = datetime.now() + timedelta(days=days, minutes=minutes)
+    users_col.update_one(
+        {"user_id": int(user_id)},
+        {"$set": {
+            "is_subscribed": True,
+            "subscription_expiry": expiry.isoformat()
+        }}
+    )
 
 def update_video_index(user_id, index):
-    db = _load_db()
-    user_id = str(user_id)
-    if user_id in db["users"]:
-        db["users"][user_id]["current_video_index"] = index
-        _save_db(db)
+    users_col.update_one({"user_id": int(user_id)}, {"$set": {"current_video_index": index}})
 
 # --- Video Operations ---
 def add_video(file_id, description, message_id=None):
-    db = _load_db()
+    seq_id = videos_col.count_documents({})
     video = {
         "file_id": file_id,
         "description": description,
         "message_id": message_id,
-        "sequence_id": len(db["videos"])
+        "sequence_id": seq_id
     }
-    db["videos"].append(video)
-    _save_db(db)
+    videos_col.insert_one(video)
     return video
 
 def get_video_by_index(index):
-    db = _load_db()
-    videos = db["videos"]
-    for v in videos:
-        if v["sequence_id"] == index:
-            return v
-    return None
+    return videos_col.find_one({"sequence_id": index})
 
 def get_total_videos():
-    db = _load_db()
-    return len(db["videos"])
+    return videos_col.count_documents({})
 
 # --- Order Operations ---
 def create_order(order_id, user_id, amount, screenshot_path=None, days=30):
-    db = _load_db()
     order = {
         "order_id": order_id,
         "user_id": user_id,
@@ -116,135 +144,125 @@ def create_order(order_id, user_id, amount, screenshot_path=None, days=30):
         "status": "PENDING_APPROVAL",
         "created_at": datetime.now().isoformat()
     }
-    db["orders"][order_id] = order
-    _save_db(db)
+    orders_col.insert_one(order)
     return order
 
 def update_order_status(order_id, status):
-    db = _load_db()
-    if order_id in db["orders"]:
-        db["orders"][order_id]["status"] = status
-        _save_db(db)
+    orders_col.update_one({"order_id": order_id}, {"$set": {"status": status}})
 
 def get_order(order_id):
-    db = _load_db()
-    return db["orders"].get(order_id)
+    return orders_col.find_one({"order_id": order_id})
 
 # --- Admin Operations ---
 def get_all_users():
-    db = _load_db()
-    # Convert dict to list
-    return list(db["users"].values())
+    return list(users_col.find())
 
 def get_pending_orders():
-    db = _load_db()
-    pending = []
-    for order in db["orders"].values():
-        if order.get("status") == "PENDING_APPROVAL":
-            pending.append(order)
-    return pending
+    return list(orders_col.find({"status": "PENDING_APPROVAL"}))
 
 def approve_order(order_id):
-    db = _load_db()
-    if order_id in db["orders"]:
-        order = db["orders"][order_id]
-        if order["status"] == "SUCCESS":
+    order = orders_col.find_one({"order_id": order_id})
+    if order:
+        if order.get("status") == "SUCCESS":
             return False # Already approved
             
-        # Update Order
-        db["orders"][order_id]["status"] = "SUCCESS"
+        orders_col.update_one({"_id": order["_id"]}, {"$set": {"status": "SUCCESS"}})
         
-        # Update User Subscription
-        user_id = str(order["user_id"])
-        
-        # Fallback: Default to 30 days if 'days' not in order
+        user_id = int(order["user_id"])
         days = order.get("days", 30) 
         
-        # Create user if not exists (edge case)
-        if user_id not in db["users"]:
-             db["users"][user_id] = {
-                "user_id": int(user_id),
-                "is_subscribed": False,
-                "subscription_expiry": None,
-                "current_video_index": 0
-            }
-            
+        user = users_col.find_one({"user_id": user_id})
         expiry = datetime.now() + timedelta(days=days)
-        db["users"][user_id]["is_subscribed"] = True
-        db["users"][user_id]["subscription_expiry"] = expiry.isoformat()
         
-        _save_db(db)
+        if not user:
+             users_col.insert_one({
+                "user_id": user_id,
+                "is_subscribed": True,
+                "subscription_expiry": expiry.isoformat(),
+                "current_video_index": 0,
+                "joined_at": datetime.now().isoformat()
+            })
+        else:
+            users_col.update_one(
+                {"_id": user["_id"]},
+                {"$set": {
+                    "is_subscribed": True,
+                    "subscription_expiry": expiry.isoformat()
+                }}
+            )
         return True
     return False
 
 def reject_order(order_id):
-    db = _load_db()
-    if order_id in db["orders"]:
-        db["orders"][order_id]["status"] = "REJECTED"
-        _save_db(db)
-        return True
-    return False
+    result = orders_col.update_one({"order_id": order_id}, {"$set": {"status": "REJECTED"}})
+    return result.modified_count > 0
 
 def expire_user(user_id):
-    db = _load_db()
-    user_id = str(user_id)
-    if user_id in db["users"]:
-        db["users"][user_id]["is_subscribed"] = False
-        db["users"][user_id]["subscription_expiry"] = None # Or keep date for record
-        _save_db(db)
-        return True
-    return False
+    result = users_col.update_one(
+        {"user_id": int(user_id)},
+        {"$set": {
+            "is_subscribed": False,
+            "subscription_expiry": None
+        }}
+    )
+    return result.modified_count > 0
 
 def get_earnings_stats():
-    db = _load_db()
-    orders = db["orders"].values()
+    orders = list(orders_col.find({"status": "SUCCESS"}))
     
     total_earnings = 0
     daily_earnings = 0
     today_str = datetime.now().date().isoformat()
     
     for order in orders:
-        if order.get("status") == "SUCCESS":
-            try:
-                amount = float(order["amount"])
-                total_earnings += amount
-                
-                # Check date
-                created_at = order.get("created_at")
-                if created_at and created_at.startswith(today_str):
-                    daily_earnings += amount
-            except (ValueError, TypeError):
-                pass
-                
+        try:
+            amount = float(order["amount"])
+            total_earnings += amount
+            
+            created_at = order.get("created_at", "")
+            if created_at.startswith(today_str):
+                daily_earnings += amount
+        except (ValueError, TypeError):
+            pass
+            
     return {
         "total": total_earnings,
         "daily": daily_earnings
     }
 
+def get_daily_user_analytics():
+    # Group users by joined_at date snippet (YYYY-MM-DD)
+    users = list(users_col.find({}, {"joined_at": 1}))
+    analytics = {}
+    
+    for u in users:
+        # Default to old users if they don't have joined_at (from migration)
+        joined_date = u.get("joined_at", "2024-01-01T")[:10]
+        if joined_date not in analytics:
+            analytics[joined_date] = 0
+        analytics[joined_date] += 1
+        
+    # Sort by date
+    sorted_analytics = dict(sorted(analytics.items(), key=lambda x: x[0], reverse=True))
+    return sorted_analytics
+
 # --- Payout Operations ---
 def add_payout(amount, note=""):
-    db = _load_db()
-    if "payouts" not in db:
-        db["payouts"] = []
-    
     payout = {
-        "id": str(len(db["payouts"]) + 1),
+        "id": str(payouts_col.count_documents({}) + 1),
         "amount": float(amount),
         "date": datetime.now().isoformat(),
         "note": note
     }
-    db["payouts"].append(payout)
-    _save_db(db)
+    payouts_col.insert_one(payout)
     return payout
 
 def get_payouts():
-    db = _load_db()
-    return db.get("payouts", [])
+    return list(payouts_col.find())
 
 def get_total_paid():
-    db = _load_db()
     total = 0
-    for p in db.get("payouts", []):
+    for p in payouts_col.find():
         try:
             total += float(p["amount"])
         except:

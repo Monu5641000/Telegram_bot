@@ -48,8 +48,9 @@ async def show_subscription_plans(update: Update, context: ContextTypes.DEFAULT_
     user_id = update.effective_user.id
     user = db.get_user(user_id)
     
+    plans = db.get_pricing_plans()
     keyboard = []
-    for plan_name, details in config.PLANS.items():
+    for plan_name, details in plans.items():
         # Check if it's a URL-based plan (Demo)
         if details.get('url'):
             keyboard.append([InlineKeyboardButton(plan_name, url=details['url'])])
@@ -66,22 +67,24 @@ async def show_subscription_plans(update: Update, context: ContextTypes.DEFAULT_
     if message_text:
         text = message_text
     else:
-        text = (
-            "18+ ONLY. VIP ACCESS.\n\n"
-            "I deliver raw, explicit premium adult videos.\n"
-            "This space is private, uncensored.\n\n"
-            "What you get 🔥\n"
-            "• Nude & lingerie content\n"
-            "• Explicit solo sessions\n"
-            "• POV fantasies\n"
-            "• Desi / Indian vibes\n"
-            "• Young-adult energy (18+)\n"
-            "• Amateur & home-style clips\n"
-            "• Roleplay scenarios (18+)\n"
-            "• Tease → full reveal drops\n\n"
-            "Unlock exclusive content by subscribing to one of our plans per below.\n\n"
-            "👇 Choose a plan to continue:"
-        )
+        text = db.get_main_menu_text()
+        if not text:
+            text = (
+                "18+ ONLY. VIP ACCESS.\n\n"
+                "I deliver raw, explicit premium adult videos.\n"
+                "This space is private, uncensored.\n\n"
+                "What you get 🔥\n"
+                "• Nude & lingerie content\n"
+                "• Explicit solo sessions\n"
+                "• POV fantasies\n"
+                "• Desi / Indian vibes\n"
+                "• Young-adult energy (18+)\n"
+                "• Amateur & home-style clips\n"
+                "• Roleplay scenarios (18+)\n"
+                "• Tease → full reveal drops\n\n"
+                "Unlock exclusive content by subscribing to one of our plans per below.\n\n"
+                "👇 Choose a plan to continue:"
+            )
     
     # Image Logic
     photos_dir = "photos"
@@ -229,7 +232,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if data.startswith("plan_"):
         plan_name = data.split("_")[1]
-        plan = config.PLANS.get(plan_name)
+        plans = db.get_pricing_plans()
+        plan = plans.get(plan_name)
         if not plan:
             return
             
@@ -349,8 +353,14 @@ async def check_expiry_job(context: ContextTypes.DEFAULT_TYPE):
                 # Refactoring 'show_subscription_plans' to check for update is best.
                 # For now, let's just send text + inline keyboard manually.
                 
+                plans = db.get_pricing_plans()
                 keyboard = []
-                for plan_name, details in config.PLANS.items():
+                for plan_name, details in plans.items():
+                    if details.get('url'):
+                        keyboard.append([InlineKeyboardButton(plan_name, url=details['url'])])
+                        continue
+                    if details['price'] == 0 and user.get("demo_used"):
+                        continue
                     keyboard.append([InlineKeyboardButton(f"{plan_name} - ₹{details['price']}", callback_data=f"plan_{plan_name}")])
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 

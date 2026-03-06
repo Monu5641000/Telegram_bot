@@ -60,6 +60,9 @@ def index():
     users = db.get_all_users()
     orders = db.get_pending_orders()
     stats = db.get_earnings_stats()
+    analytics = db.get_daily_user_analytics()
+    main_menu_text = db.get_main_menu_text() or ""
+    pricing_plans = db.get_pricing_plans()
     
     # Financials (40% Yash, 60% Abhishek)
     total_earnings = stats['total']
@@ -81,7 +84,23 @@ def index():
         "payouts": payouts
     }
 
-    return render_template('index.html', users=users, orders=orders, stats=stats, financials=financials)
+    return render_template('index.html', users=users, orders=orders, stats=stats, financials=financials, analytics=analytics, main_menu_text=main_menu_text, pricing_plans=pricing_plans)
+
+@app.route('/api/update_main_menu', methods=['POST'])
+def update_main_menu():
+    text = request.json.get("text")
+    if text is not None:
+        db.update_main_menu_text(text)
+        return jsonify({"status": "success"})
+    return jsonify({"status": "error"}), 400
+
+@app.route('/api/update_pricing', methods=['POST'])
+def update_pricing():
+    plans = request.json.get("plans")
+    if plans:
+        db.update_pricing_plans(plans)
+        return jsonify({"status": "success"})
+    return jsonify({"status": "error"}), 400
 
 @app.route('/api/mark_paid', methods=['POST'])
 def mark_paid():

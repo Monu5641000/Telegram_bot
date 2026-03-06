@@ -268,6 +268,36 @@
             </div>
         </details>
 
+        <!-- USER ANALYTICS SECTION -->
+        <details style="margin-bottom: 30px;">
+            <summary style="cursor: pointer; color: #555; outline: none; font-size: 1.2em; font-weight: bold;">📈 Daily
+                User Analytics</summary>
+            <div class="table-responsive" style="margin-top: 10px; max-height: 250px; overflow-y: auto;">
+                <table style="margin-top: 0; font-size: 0.9em;">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>New Users Joined</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% if analytics %}
+                        {% for date, count in analytics.items() %}
+                        <tr>
+                            <td style="font-weight: bold;">{{ date }}</td>
+                            <td style="color: #0984e3; font-weight: bold;">+{{ count }} Users</td>
+                        </tr>
+                        {% endfor %}
+                        {% else %}
+                        <tr>
+                            <td colspan="2">No user analytics yet.</td>
+                        </tr>
+                        {% endif %}
+                    </tbody>
+                </table>
+            </div>
+        </details>
+
         <h2>⏳ Pending Approvals</h2>
         {% if orders %}
         <div class="table-responsive">
@@ -375,6 +405,35 @@
         </div>
     </div>
 
+    <div class="container" style="margin-top: 20px;">
+        <h2>📝 Bot Text & Pricing Settings</h2>
+        <div style="display: flex; gap: 20px; flex-wrap: wrap;">
+            <!-- Main Menu Text -->
+            <div
+                style="flex: 1; background: white; padding: 20px; border-radius: 8px; border: 1px solid #eee; min-width: 300px;">
+                <h3 style="margin-top: 0;">Main Menu Text</h3>
+                <textarea id="main-menu-text" rows="18"
+                    style="width: 100%; padding: 10px; border-radius: 4px; border: 1px solid #ddd; margin-bottom: 10px; resize: vertical;"
+                    placeholder="Leave empty for default..."></textarea>
+                <button class="btn" style="background: #e84393; color: white;" onclick="updateMainMenu()">💾 Save
+                    Text</button>
+            </div>
+
+            <!-- Pricing Editor -->
+            <div
+                style="flex: 1; background: white; padding: 20px; border-radius: 8px; border: 1px solid #eee; min-width: 300px;">
+                <h3 style="margin-top: 0;">Pricing Plans (JSON format)</h3>
+                <textarea id="pricing-plans-json" rows="18"
+                    style="width: 100%; padding: 10px; border-radius: 4px; border: 1px solid #ddd; margin-bottom: 10px; font-family: monospace; font-size: 0.9em; resize: vertical;"
+                    spellcheck="false"></textarea>
+                <button class="btn" style="background: #00cec9; color: white;" onclick="updatePricing()">💾 Save
+                    Pricing</button>
+                <p style="font-size: 0.8em; color: #666; margin-top: 5px;">Ensure to write valid JSON. Incorrectly
+                    formatted JSON won't be saved!</p>
+            </div>
+        </div>
+    </div>
+
     <!-- ALL USERS SECTION (Moved to Bottom) -->
     <div class="container" style="margin-top: 20px; margin-bottom: 40px;">
         <h2>👥 All Users</h2>
@@ -417,7 +476,54 @@
         </div>
     </div>
 
+    <script id="main-menu-data" type="application/json">{{ main_menu_text|tojson|safe }}</script>
+    <script id="pricing-plans-data" type="application/json">{{ pricing_plans|tojson|safe }}</script>
     <script>
+        const initialMenuText = JSON.parse(document.getElementById('main-menu-data').textContent);
+        const initialPricing = JSON.parse(document.getElementById('pricing-plans-data').textContent);
+
+        document.addEventListener("DOMContentLoaded", () => {
+            if (initialMenuText) {
+                document.getElementById('main-menu-text').value = initialMenuText;
+            }
+            if (initialPricing) {
+                document.getElementById('pricing-plans-json').value = JSON.stringify(initialPricing, null, 4);
+            }
+        });
+
+        async function updateMainMenu() {
+            const text = document.getElementById('main-menu-text').value;
+            try {
+                const res = await fetch('/api/update_main_menu', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: text })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    alert("Main Menu Text Updated!");
+                }
+                else alert("Error: " + data.message);
+            } catch (e) { alert("Network Error: " + e); }
+        }
+
+        async function updatePricing() {
+            try {
+                const text = document.getElementById('pricing-plans-json').value;
+                const parsedPlans = JSON.parse(text);
+                const res = await fetch('/api/update_pricing', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ plans: parsedPlans })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    alert("Pricing Plans Updated!");
+                }
+                else alert("Error: " + data.message);
+            } catch (e) { alert("Invalid JSON format or Network Error: " + e); }
+        }
+
         async function markPaid() {
             const amount = document.getElementById('pay_amount').value;
             if (!amount) {
